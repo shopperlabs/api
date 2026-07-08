@@ -10,6 +10,7 @@ use Shopper\Cart\Actions\CreateOrderFromCartAction;
 use Shopper\Cart\CartManager;
 use Shopper\Cart\Exceptions\CartCompletedException;
 use Shopper\Cart\Exceptions\InsufficientStockException;
+use Shopper\Cart\Exceptions\PriceChangedException;
 use Shopper\Cart\Models\Cart;
 use Shopper\Cart\Pipelines\CartPipelineContext;
 use Shopper\Core\Exceptions\CampaignBudgetExceededException;
@@ -64,12 +65,9 @@ final readonly class CompleteCartAction
             $order = $this->createOrderFromCart->execute(
                 $cart,
                 fn (CartPipelineContext $context) => $this->guardPaymentSession($cart, $context->total),
+                fn (Order $order) => $this->recordInitiatedPayment($cart, $order),
             );
         } catch (CartCompletedException) {
-            // A concurrent completion won the cart lock between our staleness
-            // check and the transaction: answer with the order it placed, the
-            // same way a sequential retry does. No payment is journalized
-            // here, the winning request already did it.
             /** @var Order $order */
             $order = $cart->refresh()->order()->firstOrFail();
 
@@ -78,13 +76,11 @@ final readonly class CompleteCartAction
             throw ValidationException::withMessages([
                 'promotion' => __('shopper-cart::messages.discount.campaign_budget_reached'),
             ]);
-        } catch (InsufficientStockException $exception) {
+        } catch (InsufficientStockException|PriceChangedException $exception) {
             throw ValidationException::withMessages([
                 'cart' => $exception->getMessage(),
             ]);
         }
-
-        $this->recordInitiatedPayment($cart, $order);
 
         return $order;
     }
