@@ -47,7 +47,7 @@ trait SerializesMedia
     /**
      * @return array<int, array<string, mixed>>
      */
-    private function mediaPayload(string $collection): array
+    protected function mediaPayload(string $collection): array
     {
         if (! method_exists($this->resource, 'getMedia')) {
             return [];
@@ -62,7 +62,7 @@ trait SerializesMedia
     /**
      * @return array<string, mixed>|null
      */
-    private function firstMediaPayload(string $collection): ?array
+    protected function firstMediaPayload(string $collection): ?array
     {
         if (! method_exists($this->resource, 'getFirstMedia')) {
             return null;
@@ -76,15 +76,32 @@ trait SerializesMedia
     /**
      * @return array<string, mixed>
      */
-    private function mediaToArray(Media $media): array
+    protected function mediaToArray(Media $media): array
     {
         return [
             'id' => $media->uuid,
             'url' => $media->getFullUrl(),
+            'conversions' => $this->conversionUrls($media),
             'name' => $media->name,
             'extension' => $media->extension,
             'created_at' => $media->created_at?->toIso8601String(),
             'updated_at' => $media->updated_at?->toIso8601String(),
         ];
+    }
+
+    /**
+     * The resized variants a storefront should display instead of the original.
+     * Read from the media row rather than from the configured conversions, so
+     * an image uploaded before a conversion existed never advertises a url
+     * pointing at a file that was never written.
+     *
+     * @return array<string, string>
+     */
+    protected function conversionUrls(Media $media): array
+    {
+        return $media->getGeneratedConversions()
+            ->filter()
+            ->map(fn (mixed $generated, string $name): string => $media->getFullUrl($name))
+            ->all();
     }
 }

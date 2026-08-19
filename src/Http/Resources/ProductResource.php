@@ -18,12 +18,12 @@ use Spatie\MediaLibrary\MediaCollections\Models\Media;
 /**
  * @mixin Product
  */
-final class ProductResource extends JsonApiResource
+class ProductResource extends JsonApiResource
 {
     use SerializesMedia;
     use SerializesPrices;
 
-    public function toType(Request $request): string
+    final public function toType(Request $request): string
     {
         return 'products';
     }
@@ -45,7 +45,8 @@ final class ProductResource extends JsonApiResource
             'metadata' => $this->metadata,
             ...($this->isExternal() ? ['external_id' => $this->external_id] : []),
             ...$this->stockPayload(),
-            'prices' => $this->pricesPayload(),
+            ...$this->priceRangePayload(),
+            'prices' => $this->canUseVariants() ? [] : $this->pricesPayload(),
             'images' => $this->imagesPayload(),
             'thumbnail' => $this->thumbnailPayload(withFallback: true),
             ...($this->isVirtual() ? ['files' => $this->filesPayload()] : []),
@@ -61,6 +62,7 @@ final class ProductResource extends JsonApiResource
             'brand' => fn () => BrandResource::make($this->brand),
             'categories' => fn () => CategoryResource::collection($this->categories),
             'collections' => fn () => CollectionResource::collection($this->collections),
+            'tags' => fn () => TagResource::collection($this->tags),
             'relatedProducts' => fn () => ProductResource::collection($this->relatedProducts),
         ];
 
@@ -81,7 +83,7 @@ final class ProductResource extends JsonApiResource
     private function stockPayload(): array
     {
         if ($this->isExternal()) {
-            return [];
+            return ['in_stock' => true];
         }
 
         $raw = $this->resource->getAttributes();
@@ -128,6 +130,32 @@ final class ProductResource extends JsonApiResource
         return [
             'rating' => $average !== null ? round((float) $average, 1) : null,
             'reviews_count' => (int) $raw['reviews_count'],
+        ];
+    }
+
+    /**
+     * The min/max price aggregate in the currency resolved for the request,
+     * batch-loaded by the controller (LoadsPriceRange). Null when the product
+     * has no price in that currency; absent on responses that do not load it.
+     *
+     * @return array<string, array<string, int|string>|null>
+     */
+    private function priceRangePayload(): array
+    {
+        $raw = $this->resource->getAttributes();
+
+        if (! array_key_exists('price_range_min', $raw)) {
+            return [];
+        }
+
+        $currency = request()->attributes->get('shopper_price_currency');
+
+        return [
+            'price_range' => $raw['price_range_min'] === null || $currency === null ? null : [
+                'currency_code' => $currency->code,
+                'min' => (int) $raw['price_range_min'],
+                'max' => (int) $raw['price_range_max'],
+            ],
         ];
     }
 

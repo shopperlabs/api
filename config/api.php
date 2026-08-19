@@ -35,54 +35,75 @@ return [
             'filters' => [
                 'name' => 'partial',
                 'sku' => 'exact',
-                'q' => ['scope', 'search'],
+                'q' => ['scope', 'matching'],
+                'featured' => 'exact',
+                'in_stock' => ['scope', 'availability'],
                 'category' => 'scope',
+                'category_tree' => ['scope', 'categoryTree'],
                 'collection' => ['scope', 'collection'],
                 'brand' => ['scope', 'byBrand'],
                 'tag' => ['scope', 'tag'],
                 'option' => ['scope', 'option'],
             ],
-            'sorts' => ['name', 'created_at', 'published_at'],
+            'sorts' => ['name', 'created_at', 'published_at', 'price' => ['field', 'min_price']],
             'includes' => [
-                'brand',
+                'brand' => Shopper\Api\Http\Includes\EnabledRelation::class,
                 'variants',
-                'categories',
-                'collections',
+                'categories' => Shopper\Api\Http\Includes\VisibleCategories::class,
+                'collections' => Shopper\Api\Http\Includes\PublishedRelation::class,
                 'options',
-                'relatedProducts',
+                'tags',
+                'relatedProducts' => Shopper\Api\Http\Includes\PublicProducts::class,
                 'rating' => Shopper\Api\Http\Includes\RatingAggregate::class,
+                'price_range' => Shopper\Api\Http\Includes\ListingPriceRange::class,
             ],
             'include_loads' => [
                 'variants' => ['variants.prices.currency', 'variants.values.attribute'],
                 'options' => ['options.values', 'attributeProducts.media'],
-                'relatedProducts' => ['relatedProducts.prices.currency'],
+                'categories' => ['categories.parent'],
             ],
         ],
         'category' => [
             'filters' => ['name' => 'partial'],
             'sorts' => ['name', 'position'],
-            'includes' => ['parent', 'children', 'products'],
+            'includes' => [
+                'parent' => Shopper\Api\Http\Includes\EnabledRelation::class,
+                'children' => Shopper\Api\Http\Includes\EnabledRelation::class,
+                'ancestors' => Shopper\Api\Http\Includes\EnabledRelation::class,
+                'products' => Shopper\Api\Http\Includes\PublicProducts::class,
+                'products_count' => Shopper\Api\Http\Includes\SubtreeProductsCount::class,
+            ],
             'include_loads' => [
-                'products' => ['products.prices.currency'],
+                'parent' => ['parent.parent'],
+                'children' => ['children.parent'],
+                'ancestors' => ['ancestors.parent', 'ancestors.media'],
             ],
         ],
         'collection' => [
             'filters' => ['name' => 'partial'],
             'sorts' => ['name'],
-            'includes' => [],
+            'includes' => [
+                'products' => Shopper\Api\Http\Includes\PublicProducts::class,
+            ],
         ],
         'brand' => [
             'filters' => ['name' => 'partial'],
             'sorts' => ['name', 'position'],
-            'includes' => ['products'],
-            'include_loads' => [
-                'products' => ['products.prices.currency'],
+            'includes' => [
+                'products' => Shopper\Api\Http\Includes\PublicProducts::class,
             ],
         ],
         'attribute' => [
             'filters' => ['name' => 'partial'],
             'sorts' => ['name', 'position'],
             'includes' => [],
+        ],
+        'tag' => [
+            'filters' => ['name' => 'partial'],
+            'sorts' => ['name'],
+            'includes' => [
+                'products' => Shopper\Api\Http\Includes\PublicProducts::class,
+            ],
         ],
         'country' => [
             'filters' => [
@@ -93,7 +114,7 @@ return [
                 'zone' => ['exact', 'zones.code'],
             ],
             'sorts' => ['name'],
-            'includes' => ['zones'],
+            'includes' => ['zones' => Shopper\Api\Http\Includes\EnabledRelation::class],
         ],
         'zone' => [
             'filters' => ['name' => 'partial', 'code' => 'exact'],
@@ -110,5 +131,53 @@ return [
             'sorts' => ['created_at'],
             'includes' => ['items'],
         ],
+        'review' => [
+            'filters' => ['rating' => 'exact'],
+            'sorts' => ['created_at', 'rating'],
+            'includes' => [],
+            'latest_limit' => 20,
+        ],
+        'legal' => [
+            'filters' => ['title' => 'partial'],
+            'sorts' => ['title', 'updated_at'],
+            'includes' => [],
+        ],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Public store settings
+    |--------------------------------------------------------------------------
+    |
+    | Here you may list the setting keys the /store/settings endpoint returns.
+    | The settings table also holds administration keys, so the endpoint reads
+    | from this allowlist and never from the table itself. Add your own keys to
+    | expose them; a key that was never filled in comes back as null.
+    |
+    | The `country_id`, `default_currency_id`, `currencies`, `logo`, `cover`
+    | and `social_links` keys are resolved to their public shape (ISO code,
+    | currency code, media URL) rather than the internal value.
+    |
+    */
+    'settings' => [
+        'expose' => [
+            'name',
+            'legal_name',
+            'about',
+            'email',
+            'phone_number',
+            'street_address',
+            'city',
+            'postal_code',
+            'state',
+            'country_id',
+            'logo',
+            'cover',
+            'social_links',
+            'default_currency_id',
+            'currencies',
+        ],
+
+        'max_age' => 300,
     ],
 ];

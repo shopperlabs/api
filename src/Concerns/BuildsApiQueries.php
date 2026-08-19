@@ -9,15 +9,20 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Pagination\Cursor;
 use Illuminate\Pagination\CursorPaginator;
 use Illuminate\Pagination\LengthAwarePaginator;
+use Illuminate\Support\Arr;
 use Illuminate\Support\Collection;
+use Illuminate\Validation\ValidationException;
 use Spatie\QueryBuilder\AllowedFilter;
 use Spatie\QueryBuilder\AllowedInclude;
+use Spatie\QueryBuilder\AllowedSort;
 use Spatie\QueryBuilder\Includes\IncludeInterface;
 use Spatie\QueryBuilder\QueryBuilder;
 use Spatie\QueryBuilder\QueryBuilderRequest;
 
 trait BuildsApiQueries
 {
+    private const int MAX_FILTER_VALUES = 50;
+
     /**
      * Wrap an Eloquent query with the spatie query builder, applying the
      * filter / sort / include allowlist configured for the given resource.
@@ -27,14 +32,16 @@ trait BuildsApiQueries
      *
      * @param  Builder<TModel>  $query
      */
-    protected function apiQuery(string $resource, Builder $query): QueryBuilder
+    protected function apiQuery(string $resource, Builder $query, array $extraFilters = []): QueryBuilder
     {
+        $this->guardFilterBreadth();
+
         $allowlist = (array) config('shopper.api.resources.'.$resource, []);
         $request = QueryBuilderRequest::fromRequest(request());
 
         $builder = QueryBuilder::for($query, $request)
-            ->allowedFilters(...$this->allowedFilters((array) ($allowlist['filters'] ?? [])))
-            ->allowedSorts(...($allowlist['sorts'] ?? []))
+            ->allowedFilters(...$this->allowedFilters((array) ($allowlist['filters'] ?? [])), ...$extraFilters)
+            ->allowedSorts(...$this->allowedSorts((array) ($allowlist['sorts'] ?? [])))
             ->allowedIncludes(...$this->allowedIncludes((array) ($allowlist['includes'] ?? [])));
 
         $loads = $this->requestedIncludeLoads($resource);
@@ -84,6 +91,38 @@ trait BuildsApiQueries
     }
 
     /**
+     * Install the custom includes configured for a resource on an endpoint that
+     * reads a single record. Only a listing goes through the spatie query
+     * builder, which is what installs them; a show endpoint resolves its
+     * includes straight from the query string, so without this the relations
+     * are lazy-loaded at serialization time with no constraint at all.
+     *
+     * @param  Builder<Model>  $query
+     * @return Builder<Model>
+     */
+    protected function applyPublicIncludes(string $resource, Builder $query): Builder
+    {
+        $requested = $this->requestedIncludes();
+
+        /** @var array<int|string, string> $includes */
+        $includes = (array) config('shopper.api.resources.'.$resource.'.includes', []);
+
+        foreach ($includes as $name => $class) {
+            if (is_int($name) || ! $requested->contains($name)) {
+                continue;
+            }
+
+            $include = resolve($class);
+
+            if ($include instanceof IncludeInterface) {
+                $include($query, $name);
+            }
+        }
+
+        return $query;
+    }
+
+    /**
      * @template TModel of Model
      *
      * @param  Builder<TModel>  $query
@@ -110,7 +149,7 @@ trait BuildsApiQueries
      *
      * @param  Builder<TModel>  $query
      */
-    protected function paginated(string $resource, Builder $query, ?string $defaultSort = null): CursorPaginator|LengthAwarePaginator
+    protected function paginated(string $resource, Builder $query, ?string $defaultSort = null, array $extraFilters = []): CursorPaginator|LengthAwarePaginator
     {
         $default = (int) config('shopper.api.pagination.per_page', 15);
         $max = (int) config('shopper.api.pagination.max_per_page', 100);
@@ -118,7 +157,7 @@ trait BuildsApiQueries
 
         $size = min(max((int) request()->input('page.size', $default), 1), $max);
 
-        $builder = $this->apiQuery($resource, $query);
+        $builder = $this->apiQuery($resource, $query, $extraFilters);
 
         if ($defaultSort !== null) {
             $builder->defaultSort($defaultSort);
@@ -128,7 +167,7 @@ trait BuildsApiQueries
             $encoded = (string) request()->input('page.cursor');
 
             return $builder
-                ->orderBy($query->getModel()->getKeyName())
+                ->orderBy($query->qualifyColumn($query->getModel()->getKeyName()))
                 ->cursorPaginate(
                     perPage: $size,
                     cursorName: 'page[cursor]',
@@ -140,8 +179,24 @@ trait BuildsApiQueries
         $page = min(max((int) request()->input('page.number', 1), 1), $maxPage);
 
         return $builder
+            ->orderBy($query->qualifyColumn($query->getModel()->getKeyName()))
             ->paginate(perPage: $size, pageName: 'page[number]', page: $page)
             ->withQueryString();
+    }
+
+    private function guardFilterBreadth(): void
+    {
+        QueryBuilderRequest::fromRequest(request())->filters()
+            ->each(function (mixed $values, string $filter): void {
+                $breadth = (new Collection(Arr::flatten([$values])))
+                    ->sum(fn (mixed $value): int => mb_substr_count((string) $value, ',') + 1);
+
+                if ($breadth > self::MAX_FILTER_VALUES) {
+                    throw ValidationException::withMessages([
+                        'filter.'.$filter => __('shopper-api::messages.catalog.filter_too_wide', ['max' => self::MAX_FILTER_VALUES]),
+                    ]);
+                }
+            });
     }
 
     /**
@@ -168,6 +223,26 @@ trait BuildsApiQueries
             $include = resolve($value);
 
             $allowed[] = AllowedInclude::custom($key, $include);
+        }
+
+        return $allowed;
+    }
+
+    /**
+     * Build the spatie sort list from a config descriptor map. A plain string
+     * entry sorts by the column of the same name; a `name => ['field', 'alias']`
+     * entry sorts by another column or select alias, e.g. the price sort
+     * ordering by the `min_price` aggregate.
+     *
+     * @param  array<int|string, string|array{0: string, 1: string}>  $sorts
+     * @return array<int, string|AllowedSort>
+     */
+    private function allowedSorts(array $sorts): array
+    {
+        $allowed = [];
+
+        foreach ($sorts as $key => $value) {
+            $allowed[] = is_int($key) ? $value : AllowedSort::field($key, $value[1]);
         }
 
         return $allowed;
